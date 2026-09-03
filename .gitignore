@@ -15,3 +15,5 @@ venv/
 .vscode/
 dist/
 build/
+# Offline experiment outputs (model weights/checkpoints can be very large).
+artifacts/p_text_baseline/
