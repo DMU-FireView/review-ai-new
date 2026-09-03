@@ -14,7 +14,7 @@ from .metrics import classification_metrics
 
 @dataclass
 class Config:
-    data_path: str = "data/ReView_Integrated_Review_Dataset_v3_2차검수.xlsx"
+    data_path: str = "data/ReView_Integrated_Review_Dataset_v4_3_전체재검수_SUSPICIOUS확정.xlsx"
     output_dir: str = "artifacts/p_text_baseline"
     model_name: str = "monologg/koelectra-base-v3-discriminator"
     epochs: int = 3
