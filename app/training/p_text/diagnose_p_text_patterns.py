@@ -32,7 +32,7 @@ from .diagnose_split_by_type import load_diagnoses, prepare_master_rows
 
 DEFAULT_DATA_PATH = "data/ReView_Integrated_Review_Dataset_v4_3_전체재검수_SUSPICIOUS확정.xlsx"
 DEFAULT_DIAGNOSIS_PATH = "artifacts/diagnostics/suspicious_type_diagnosis_v2.csv"
-DEFAULT_OUTPUT_PATH = "artifacts/diagnostics/p_text_pattern_diagnosis_v2.csv"
+DEFAULT_OUTPUT_PATH = "artifacts/diagnostics/p_text_pattern_diagnosis_v4.csv"
 EXPECTED_REVIEWED_TEXT_STRONG = 28
 EXPECTED_USABLE_TEXT_STRONG = 23
 PATTERN_ORDER = (
@@ -107,13 +107,17 @@ def has_structured_information(review: str) -> bool:
         return True
 
     heading_pattern = re.compile(
-        r"^(?:✨|✅|✔|☑|📌|💡|▶)?\s*"
-        r"(?:핵심\s*성분|주요\s*성분|효능|특징|사용법)\s*[:：]?\s*$",
+        r"^(?:핵심\s*성분|주요\s*성분|효능|특징|사용법)\s*[:：]?\s*$",
         flags=re.IGNORECASE,
     )
+
+    def is_heading(line: str) -> bool:
+        without_decoration = re.sub(r"^[^가-힣A-Za-z0-9]+", "", line).strip()
+        return bool(heading_pattern.match(without_decoration))
+
     sentence_ending = re.compile(r"(?:요|습니다|입니다|했어요|합니다)[.!?。！？]?$", re.IGNORECASE)
     for index, line in enumerate(raw_lines):
-        if not heading_pattern.match(line):
+        if not is_heading(line):
             continue
         item_count = 0
         started = False
@@ -122,7 +126,7 @@ def has_structured_information(review: str) -> bool:
                 if started:
                     break
                 continue
-            if heading_pattern.match(candidate):
+            if is_heading(candidate):
                 break
             words = re.findall(r"[가-힣A-Za-z0-9%]+", candidate)
             if not (1 <= len(words) <= 6 and 2 <= len(candidate) <= 40):
@@ -139,8 +143,11 @@ def has_structured_information(review: str) -> bool:
 def has_personal_experience(review: str) -> bool:
     patterns = (
         r"(?:직접|실제로)\s*(?:사용|구매|설치|먹|입|발라|써)",
+        r"(?:사진|화면)(?:으로)?\s*(?:봤을?|보았을?|볼)\s*때.{0,50}(?:색|색상|향|예쁘|이쁘|부담|느낌)",
+        r"직접\s*(?:보니|보니까|봤을?|착용해\s*보니|사용해\s*보니)",
         r"사용(?:해|했|하면서|중이|후에)|써\s*보|써봤|먹어\s*보|먹었|입어\s*보|입었",
         r"발라\s*보|발랐|설치했|배송받|도착했|주문했|구매했|재구매했",
+        r"(?:색|색상|향|착용감|사용감).{0,30}(?:예쁘|이쁘|부담|마음에|느껴|좋았|별로)",
         r"(?:며칠|몇\s*주|일주일|개월|한\s*달|두\s*달).{0,12}(?:사용|복용|써|먹)",
         r"(?:저는|제가|우리\s*집|아이|가족|부모님|남편|아내).{0,18}(?:사용|먹|입|좋|맞)",
     )
@@ -222,7 +229,9 @@ def select_usable_text_strong(
             raise ValueError(f"Workbook/CSV review mismatch for master_id={master_id}")
         if diagnosis["diagnostic_type"] != "TEXT_STRONG":
             continue
-        pattern, reason = classify_pattern(diagnosis)
+        classification_input = dict(diagnosis)
+        classification_input["review"] = str(master_row["text"])
+        pattern, reason = classify_pattern(classification_input)
         selected.append(
             {
                 "master_id": master_id,
