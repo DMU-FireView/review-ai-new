@@ -1,2 +1,10 @@
-"""Offline training utilities; intentionally disconnected from the RTI runtime."""
+"""오프라인 모델 학습 기능을 제공하는 패키지.
+
+역할: [AI 학습] 데이터셋, 학습, 평가지표 및 진단 도구를 RTI 운영 환경과
+분리한다.
+수정 범위: 패키지 공개 항목이나 운영 코드와의 연결 변경은 AI 담당자 검토가
+필요하다.
+주의: 이 패키지를 import하는 것만으로 학습, 추론, crawler 호출 또는 artifact
+저장이 시작되어서는 안 된다.
+"""
 

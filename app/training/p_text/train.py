@@ -1,4 +1,12 @@
-"""CLI for the offline KoELECTRA P_text v0 baseline."""
+"""리뷰 텍스트만 사용하는 오프라인 KoELECTRA P_text baseline 학습 모듈.
+
+역할: [AI 학습] 검수 데이터를 준비하고 가중치를 적용한 이진 분류 모델을
+학습하며, test split 평가 후 설정된 model 및 metric artifact를 저장한다.
+수정 범위: 모델 입력, split 정책, loss, threshold 또는 artifact 구조 변경은
+AI 담당자 검토가 필요하며 API 연동 목적으로 변경해서는 안 된다.
+주의: KoELECTRA 입력은 review text only이며, 이 명령은 artifact를 기록하는
+학습 코드로서 운영 runtime이나 crawler 진입점이 아니다.
+"""
 
 from __future__ import annotations
 

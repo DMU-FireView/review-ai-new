@@ -1,4 +1,12 @@
-"""Data preparation and deterministic splitting for the P_text baseline."""
+"""P_text baseline용 리뷰 텍스트를 준비하고 결정론적으로 분할하는 모듈.
+
+역할: [AI 학습] 검수 workbook을 읽어 label을 선별하고, 중복 또는 충돌하는
+텍스트를 제거한 뒤 seed가 고정된 train/validation/test 데이터를 만든다.
+수정 범위: 전처리 또는 split 정책 변경은 AI 담당자 검토가 필요하며 운영 API나
+crawler 연동 작업과 분리해야 한다.
+주의: 누락된 label을 임의로 생성하지 않고, metadata는 모델 예시에서 제외하며,
+원본 dataset이나 model artifact를 수정하지 않는다.
+"""
 
 from __future__ import annotations
 

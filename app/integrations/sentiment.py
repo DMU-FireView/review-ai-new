@@ -1,7 +1,7 @@
 """외부 감성 분석 서비스를 P_text에 연결하는 adapter 모듈.
 
 수정 범위:
-- [MODEL / EXTERNAL INTEGRATION]
+- [AI 연동]
 - 외부 감성 모델이나 서비스 교체 시 수정할 수 있다.
 - P_text scoring 정책은 이 파일에서 변경하지 않는다.
 

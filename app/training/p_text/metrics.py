@@ -1,4 +1,12 @@
-"""Dependency-light binary classification metrics."""
+"""P_text 평가용 이진 분류 지표를 가벼운 의존성으로 계산하는 모듈.
+
+역할: [AI 학습] sklearn 없이 이진 label과 예측값으로 accuracy, class별 지표와
+confusion matrix를 계산한다.
+수정 범위: metric 정의 변경은 학습 모델 선택과 진단 해석에 영향을 주므로
+AI 담당자 검토가 필요하다.
+주의: 비어 있지 않은 이진 입력만 허용하며, 운영 scorer나 Ground Truth label을
+만드는 기능이 아니라 평가 전용 로직이다.
+"""
 
 from __future__ import annotations
 

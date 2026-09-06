@@ -1,7 +1,7 @@
 """리뷰 간 similarity 계산을 P_network에 제공하는 adapter 모듈.
 
 수정 범위:
-- [MODEL / EXTERNAL INTEGRATION]
+- [AI 연동]
 - 향후 한국어 embedding 또는 sentence-transformers 모델로 교체할 수 있다.
 - P_network scoring 정책은 이 파일에서 변경하지 않는다.
 
