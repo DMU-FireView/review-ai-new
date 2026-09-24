@@ -17,3 +17,5 @@ dist/
 build/
 # Offline experiment outputs (model weights/checkpoints can be very large).
 artifacts/p_text_baseline/
+
+data/p_text_v2/*.xlsx
