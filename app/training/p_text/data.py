@@ -42,15 +42,23 @@ def prepare_records(
     *,
     text_column: str = "review",
     label_column: str = "final_label",
+    use_for_training_column: str | None = None,
+    use_for_training_value: str = "YES",
 ) -> PreparedData:
     """Filter labels and remove duplicate text groups before any split.
 
     If the same normalized text has contradictory labels, the whole group is
     excluded. Returned model examples deliberately contain only ``text`` and
     ``label``; human-authored metadata never reaches tokenization.
+    When a training flag column is supplied, match its value ignoring case and
+    surrounding whitespace before filtering labels. By default no flag is read.
     """
     selected: list[dict[str, Any]] = []
     for row in records:
+        if use_for_training_column is not None:
+            flag = str(row.get(use_for_training_column, "")).strip().casefold()
+            if flag != use_for_training_value.strip().casefold():
+                continue
         name = str(row.get(label_column, "")).strip().upper()
         text = str(row.get(text_column, "")).strip()
         if name in LABEL_MAPPING and text:
@@ -133,6 +141,32 @@ def split_counts(splits: Mapping[str, Sequence[Mapping[str, Any]]]) -> dict[str,
         }
         for name, rows in splits.items()
     }
+
+
+def read_ptext_v2_workbook(path: str) -> list[dict[str, Any]]:
+    """Read v2 labeling rows, validating required columns without editing the file."""
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:
+        raise RuntimeError("Install the ml dependency group to read .xlsx files") from exc
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        if "labeling" not in workbook.sheetnames:
+            raise ValueError("Workbook must contain a labeling sheet")
+        rows = workbook["labeling"].iter_rows(values_only=True)
+        headers = [
+            str(value).strip() if value is not None else ""
+            for value in next(rows, ())
+        ]
+        required = {"content", "final_label", "use_for_training"}
+        missing = required.difference(headers)
+        if missing:
+            raise ValueError(
+                "labeling sheet is missing required columns: " + ", ".join(sorted(missing))
+            )
+        return [dict(zip(headers, values, strict=True)) for values in rows]
+    finally:
+        workbook.close()
 
 
 def read_review_master(path: str) -> list[dict[str, Any]]:
