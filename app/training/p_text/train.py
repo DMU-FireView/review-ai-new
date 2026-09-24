@@ -16,7 +16,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .data import compute_class_weights, prepare_records, read_review_master, split_counts, stratified_split
+from .data import (
+    PreparedData, compute_class_weights, prepare_records, read_ptext_v2_workbook,
+    read_review_master, split_counts, stratified_split,
+)
 from .metrics import classification_metrics
 
 
@@ -30,10 +33,12 @@ class Config:
     learning_rate: float = 2e-5
     max_length: int = 256
     seed: int = 42
+    data_format: str = "baseline"
 
 
 def parse_args() -> Config:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data-format", choices=("baseline", "v2"), default=Config.data_format)
     parser.add_argument("--data-path", default=Config.data_path)
     parser.add_argument("--output-dir", default=Config.output_dir)
     parser.add_argument("--model-name", default=Config.model_name)
@@ -43,6 +48,20 @@ def parse_args() -> Config:
     parser.add_argument("--max-length", type=int, default=Config.max_length)
     parser.add_argument("--seed", type=int, default=Config.seed)
     return Config(**vars(parser.parse_args()))
+
+
+def load_prepared_data(config: Config) -> PreparedData:
+    """Select the workbook format; expose only text/label model examples."""
+    if config.data_format == "baseline":
+        return prepare_records(read_review_master(config.data_path))
+    if config.data_format == "v2":
+        return prepare_records(
+            read_ptext_v2_workbook(config.data_path),
+            text_column="content",
+            label_column="final_label",
+            use_for_training_column="use_for_training",
+        )
+    raise ValueError(f"Unsupported data format: {config.data_format!r}")
 
 
 def main() -> None:
@@ -57,7 +76,7 @@ def main() -> None:
         raise SystemExit("Missing ML dependencies. Install with: pip install -e '.[ml]'") from exc
 
     set_seed(config.seed)
-    prepared = prepare_records(read_review_master(config.data_path))
+    prepared = load_prepared_data(config)
     splits = stratified_split(prepared.examples, seed=config.seed)
     weights = compute_class_weights(splits["train"])
     output = Path(config.output_dir)
