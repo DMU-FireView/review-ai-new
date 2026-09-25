@@ -14,7 +14,10 @@ import argparse
 from pathlib import Path
 from typing import Any, Sequence
 
-from .data import prepare_records, read_review_master, split_counts, stratified_split
+from .data import (
+    PreparedData, prepare_records, read_ptext_v2_workbook, read_review_master,
+    split_counts, stratified_split,
+)
 from .metrics import classification_metrics
 
 
@@ -26,12 +29,27 @@ THRESHOLDS = tuple(value / 100 for value in range(5, 100, 5))
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data-format", choices=("baseline", "v2"), default="baseline")
     parser.add_argument("--data-path", default=DEFAULT_DATA_PATH)
     parser.add_argument("--model-path", default=DEFAULT_MODEL_PATH)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--max-length", type=int, default=256)
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
+
+
+def load_prepared_data(args: argparse.Namespace) -> PreparedData:
+    """Load the selected workbook format without exposing metadata to prediction."""
+    if args.data_format == "baseline":
+        return prepare_records(read_review_master(args.data_path))
+    if args.data_format == "v2":
+        return prepare_records(
+            read_ptext_v2_workbook(args.data_path),
+            text_column="content",
+            label_column="final_label",
+            use_for_training_column="use_for_training",
+        )
+    raise ValueError(f"Unsupported data format: {args.data_format!r}")
 
 
 def predict_probabilities(
@@ -139,7 +157,7 @@ def main() -> None:
     if not model_path.is_dir():
         raise SystemExit(f"Model directory not found: {model_path}")
 
-    prepared = prepare_records(read_review_master(args.data_path))
+    prepared = load_prepared_data(args)
     splits = stratified_split(prepared.examples, seed=args.seed)
     print(f"Split counts: {split_counts(splits)}")
 
