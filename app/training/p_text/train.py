@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .data import (
-    PreparedData, compute_class_weights, prepare_records, read_ptext_v2_workbook,
+    PreparedData, compute_class_weights, normalize_text, prepare_records, read_ptext_v2_workbook,
     read_review_master, split_counts, stratified_split,
 )
 from .metrics import classification_metrics
@@ -34,11 +34,13 @@ class Config:
     max_length: int = 256
     seed: int = 42
     data_format: str = "baseline"
+    train_augmentation_path: str | None = None
 
 
 def parse_args() -> Config:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-format", choices=("baseline", "v2"), default=Config.data_format)
+    parser.add_argument("--train-augmentation-path", default=Config.train_augmentation_path)
     parser.add_argument("--data-path", default=Config.data_path)
     parser.add_argument("--output-dir", default=Config.output_dir)
     parser.add_argument("--model-name", default=Config.model_name)
@@ -64,6 +66,50 @@ def load_prepared_data(config: Config) -> PreparedData:
     raise ValueError(f"Unsupported data format: {config.data_format!r}")
 
 
+def prepare_training_splits(
+    config: Config, prepared: PreparedData,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
+    """Split real examples first, then append collision-free synthetic train rows."""
+    splits = stratified_split(prepared.examples, seed=config.seed)
+    audit: dict[str, Any] = {
+        "augmentation_enabled": config.train_augmentation_path is not None,
+        "augmentation_path": config.train_augmentation_path,
+        "augmentation_raw_selected": 0,
+        "augmentation_used_after_deduplication": 0,
+        "augmentation_real_collision_removed": 0,
+        "augmentation_added_to_train": 0,
+        "real_split_counts": split_counts(splits),
+    }
+    if config.train_augmentation_path is not None:
+        rows = read_ptext_v2_workbook(config.train_augmentation_path)
+        # Reject NORMAL before deduplication can hide it in a conflicting group.
+        if any(str(row.get("final_label", "")).strip().upper() == "NORMAL" for row in rows):
+            raise ValueError("Synthetic augmentation must contain only SUSPICIOUS labels; found NORMAL")
+        synthetic = prepare_records(
+            (row for row in rows if row.get("content") is not None),
+            text_column="content",
+            label_column="final_label",
+            use_for_training_column="use_for_training",
+        )
+        if not synthetic.examples:
+            raise ValueError("Synthetic augmentation has no usable SUSPICIOUS examples")
+        if any(row["label"] != 1 for row in synthetic.examples):
+            raise ValueError("Synthetic augmentation examples must all be SUSPICIOUS (1)")
+        real_texts = {
+            normalize_text(row["text"]) for examples in splits.values() for row in examples
+        }
+        additions = [row for row in synthetic.examples if normalize_text(row["text"]) not in real_texts]
+        splits["train"].extend(additions)
+        audit.update({
+            "augmentation_raw_selected": synthetic.raw_selected_count,
+            "augmentation_used_after_deduplication": len(synthetic.examples),
+            "augmentation_real_collision_removed": len(synthetic.examples) - len(additions),
+            "augmentation_added_to_train": len(additions),
+        })
+    audit["final_split_counts"] = split_counts(splits)
+    return splits, audit
+
+
 def main() -> None:
     config = parse_args()
     try:
@@ -77,7 +123,7 @@ def main() -> None:
 
     set_seed(config.seed)
     prepared = load_prepared_data(config)
-    splits = stratified_split(prepared.examples, seed=config.seed)
+    splits, augmentation_audit = prepare_training_splits(config, prepared)
     weights = compute_class_weights(splits["train"])
     output = Path(config.output_dir)
     model_dir = output / "model"
@@ -140,6 +186,7 @@ def main() -> None:
     metrics = classification_metrics(y_true, y_pred)
     metrics["class_weights"] = weights
     metrics["split_counts"] = split_counts(splits)
+    metrics.update(augmentation_audit)
     metrics["data_summary"] = {
         "raw_selected": prepared.raw_selected_count,
         "used_after_deduplication": len(prepared.examples),
