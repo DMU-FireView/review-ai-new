@@ -71,6 +71,13 @@ def prepare_training_splits(
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
     """Split real examples first, then append collision-free synthetic train rows."""
     splits = stratified_split(prepared.examples, seed=config.seed)
+    return augment_training_splits(config, splits)
+
+
+def augment_training_splits(
+    config: Config, splits: dict[str, list[dict[str, Any]]],
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
+    """Append synthetic only to train, checking every supplied real split."""
     audit: dict[str, Any] = {
         "augmentation_enabled": config.train_augmentation_path is not None,
         "augmentation_path": config.train_augmentation_path,
