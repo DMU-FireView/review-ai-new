@@ -20,8 +20,8 @@ from enum import Enum
 from math import isfinite
 
 
-SAFE_THRESHOLD = 80.0
-WARN_THRESHOLD = 50.0
+SAFE_THRESHOLD = 70.0
+WARN_THRESHOLD = 40.0
 
 
 class RTILevel(str, Enum):
@@ -200,3 +200,19 @@ def _available_score(signal: ScoreSignal) -> float:
     if signal.score is None:  # ScoreSignal 검증상 도달할 수 없는 방어 코드
         raise ValueError("available signal must have a score")
     return float(signal.score)
+
+
+def signal_from_score(score: float) -> ScoreSignal:
+    """Translate the public -1 sentinel into the existing internal missing signal."""
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        raise TypeError("score must be a number")
+    return ScoreSignal(available=False, score=None) if score == -1 else ScoreSignal(True, score)
+
+
+def calculate_rti(text_score: float, behavior_score: float = -1, network_score: float = -1,
+                  *, weights: MetaScoreWeights = DEFAULT_WEIGHTS) -> float:
+    """Contract v0.5: exclude missing signals and round RTI to one decimal."""
+    result = calculate_meta_score(MetaScoreInput(
+        signal_from_score(text_score), signal_from_score(behavior_score), signal_from_score(network_score)
+    ), weights=weights)
+    return round(result.rti, 1) if result.rti is not None else -1

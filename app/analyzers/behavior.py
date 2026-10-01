@@ -19,6 +19,14 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+# MVP heuristics, not calibrated probabilities. Missing features have no weight.
+SIGNAL_WEIGHTS = {"purchase": 0.5, "account_age": 0.2, "frequency": 0.3}
+UNVERIFIED_SCORE = 70.0
+NEW_ACCOUNT_SCORE = 80.0
+HIGH_FREQUENCY_SCORE = 85.0
+NEW_ACCOUNT_DAYS = 7
+HIGH_DAILY_COUNT = 3
+
 
 @dataclass(frozen=True, slots=True)
 class BehaviorInput:
@@ -60,6 +68,10 @@ class BehaviorAnalysisResult:
     reasons: tuple[BehaviorReason, ...]
     unavailable_reasons: tuple[str, ...]
 
+    @property
+    def behavior_score(self) -> float:
+        return self.p_behavior if self.p_behavior is not None else -1
+
 
 def analyze_behavior(data: BehaviorInput) -> BehaviorAnalysisResult:
     """사용 가능한 행동 feature만 계산하고 0~100 범위의 P_behavior를 반환한다."""
@@ -95,6 +107,7 @@ def analyze_behavior(data: BehaviorInput) -> BehaviorAnalysisResult:
 
     has_scoreable_feature = (
         data.verified_purchase is not None or reviews_written_today is not None
+        or account_age_days is not None
     )
     if not has_scoreable_feature:
         unavailable_reasons.append("insufficient_behavior_evidence")
@@ -106,13 +119,19 @@ def analyze_behavior(data: BehaviorInput) -> BehaviorAnalysisResult:
             unavailable_reasons=tuple(unavailable_reasons),
         )
 
-    # TODO: verified_purchase 하나만으로도 100점이 될 수 있는 v0 한계가 있다.
-    # Meta-Scorer 연동 시 evidence_count와 confidence를 함께 고려해야 한다.
-    score = 100.0
+    # A score reflects only supplied evidence, not a calibrated confidence.
+    scores = {}
+    if data.verified_purchase is not None:
+        if not isinstance(data.verified_purchase, bool):
+            raise TypeError("verified_purchase must be bool or None")
+        scores["purchase"] = 100.0 if data.verified_purchase else UNVERIFIED_SCORE
+    if account_age_days is not None:
+        scores["account_age"] = NEW_ACCOUNT_SCORE if account_age_days < NEW_ACCOUNT_DAYS else 100.0
+    if reviews_written_today is not None:
+        scores["frequency"] = HIGH_FREQUENCY_SCORE if reviews_written_today >= HIGH_DAILY_COUNT else 100.0
     reasons: list[BehaviorReason] = []
 
     if data.verified_purchase is False:
-        score -= 30.0
         reasons.append(
             BehaviorReason(
                 code="PURCHASE_NOT_VERIFIED",
@@ -120,8 +139,10 @@ def analyze_behavior(data: BehaviorInput) -> BehaviorAnalysisResult:
             )
         )
 
-    if reviews_written_today is not None and reviews_written_today >= 3:
-        score -= 15.0
+    if account_age_days is not None and account_age_days < NEW_ACCOUNT_DAYS:
+        reasons.append(BehaviorReason("NEW_ACCOUNT", "리뷰 작성 당시 가입 7일 미만 계정"))
+
+    if reviews_written_today is not None and reviews_written_today >= HIGH_DAILY_COUNT:
         reasons.append(
             BehaviorReason(
                 code="MULTIPLE_REVIEWS_SAME_DAY",
@@ -129,6 +150,7 @@ def analyze_behavior(data: BehaviorInput) -> BehaviorAnalysisResult:
             )
         )
 
+    score = sum(scores[key] * SIGNAL_WEIGHTS[key] for key in scores) / sum(SIGNAL_WEIGHTS[key] for key in scores)
     return BehaviorAnalysisResult(
         available=True,
         p_behavior=max(score, 0.0),

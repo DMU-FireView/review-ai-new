@@ -16,10 +16,19 @@
 """
 
 from dataclasses import dataclass
+from math import exp
 from statistics import fmean
 from typing import Protocol, Sequence
 
-from app.integrations.similarity import NormalizedTextSimilarityAdapter
+from app.integrations.similarity import (
+    NormalizedTextSimilarityAdapter,
+    hybrid_similarity_rows,
+    is_informative_text,
+)
+
+SIMILARITY_THRESHOLD = 0.85
+CLUSTER_SIZE = 5
+SIMILARITY_SCORE_FLOOR = 0.50
 
 
 class SimilarityAdapter(Protocol):
@@ -45,6 +54,7 @@ class NetworkFeatures:
     similar_review_count: int | None
     similarity_max: float | None
     similarity_mean: float | None
+    top3_mean_similarity: float | None
     compared_review_count: int
 
 
@@ -65,6 +75,10 @@ class NetworkAnalysisResult:
     features: NetworkFeatures
     reasons: tuple[NetworkReason, ...]
     unavailable_reason: str | None
+
+    @property
+    def network_score(self) -> float:
+        return self.p_network if self.p_network is not None else -1
 
 
 def analyze_network(
@@ -92,9 +106,16 @@ def analyze_network(
     if not candidates:
         return _unavailable_result("no_comparison_reviews")
 
+    if similarity_adapter is None:
+        return analyze_network_batch((target, *candidates))[0]
+
     adapter = similarity_adapter or NormalizedTextSimilarityAdapter()
+    if not is_informative_text(target.content):
+        return _unavailable_result("insufficient_text_information")
     similarities: list[float] = []
     for review in candidates:
+        if not is_informative_text(review.content):
+            continue
         similarity = adapter.calculate(target.content, review.content)
         if similarity is None:
             continue
@@ -105,40 +126,70 @@ def analyze_network(
     if not similarities:
         return _unavailable_result("similarity_unavailable")
 
-    similar_review_count = sum(similarity == 1.0 for similarity in similarities)
+    return _from_similarities(similarities)
+
+
+def _from_similarities(similarities):
+    if not similarities:
+        return _unavailable_result("similarity_unavailable")
+    similar_review_count = sum(similarity >= SIMILARITY_THRESHOLD for similarity in similarities)
+    top3_mean_similarity = fmean(sorted(similarities, reverse=True)[:3])
     features = NetworkFeatures(
         similar_review_count=similar_review_count,
         similarity_max=max(similarities),
         similarity_mean=fmean(similarities),
+        top3_mean_similarity=top3_mean_similarity,
         compared_review_count=len(similarities),
     )
 
-    score = 100.0
+    scale = lambda value: min(1.0, max(0.0, (value - SIMILARITY_SCORE_FLOOR) / 0.50))
+    cluster_scale = 1.0 - exp(-similar_review_count / 2.0)
+    score = (
+        100.0
+        - 55.0 * scale(features.similarity_max) ** 2
+        - 30.0 * scale(top3_mean_similarity) ** 2
+        - 15.0 * cluster_scale
+    )
     reasons: list[NetworkReason] = []
-    if similar_review_count >= 5:
-        score -= 50.0
+    if similar_review_count >= CLUSTER_SIZE:
         reasons.append(
             NetworkReason(
                 code="SIMILAR_REVIEW_CLUSTER",
-                message="동일하거나 정규화 후 동일한 리뷰 군집 탐지",
+                message="높은 본문 유사도의 리뷰 군집 탐지",
             )
         )
     elif similar_review_count >= 1:
-        score -= 15.0
         reasons.append(
             NetworkReason(
                 code="SIMILAR_REVIEW_PATTERN",
-                message="동일하거나 정규화 후 동일한 리뷰 탐지",
+                message="높은 본문 유사도의 리뷰 탐지",
             )
         )
 
     return NetworkAnalysisResult(
         available=True,
-        p_network=max(score, 0.0),
+        p_network=round(min(100.0, max(score, 0.0)), 1),
         features=features,
         reasons=tuple(reasons),
         unavailable_reason=None,
     )
+
+
+def analyze_network_batch(reviews: Sequence[NetworkReview]) -> tuple[NetworkAnalysisResult, ...]:
+    """Fit once, reuse sparse vectors, and avoid retaining a dense pair matrix.
+
+    Identity is review_id only; author is deliberately not part of this API.
+    """
+    ids = set()
+    for review in reviews:
+        _validate_review(review, field_name="review")
+        if review.review_id in ids:
+            raise ValueError("duplicate review_id")
+        ids.add(review.review_id)
+    if len({review.product_id for review in reviews}) > 1:
+        raise ValueError("all reviews must have the same product_id")
+    rows = hybrid_similarity_rows([review.content for review in reviews])
+    return tuple(_from_similarities(similarities) for similarities in rows)
 
 
 def _validate_review(review: NetworkReview, *, field_name: str) -> None:
@@ -158,6 +209,7 @@ def _unavailable_result(reason: str) -> NetworkAnalysisResult:
             similar_review_count=None,
             similarity_max=None,
             similarity_mean=None,
+            top3_mean_similarity=None,
             compared_review_count=0,
         ),
         reasons=(),
