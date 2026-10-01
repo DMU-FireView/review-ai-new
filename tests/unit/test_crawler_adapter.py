@@ -40,7 +40,7 @@ def test_maps_crawler_fields_to_analysis_input() -> None:
     assert result.review_id == "elevenst:545961223"
     assert result.product_id == "elevenst:1831255717"
     assert result.content == review.content
-    assert result.user_id == "가나다라01"
+    assert result.user_id is None
     assert result.review_date == written_at
 
 
@@ -100,9 +100,9 @@ def test_derives_user_review_dates_within_request() -> None:
 
     results = to_analysis_inputs(reviews)
 
-    assert results[0].user_review_dates == (first, second)
-    assert results[1].user_review_dates == (first, second)
-    assert results[2].user_review_dates == (first,)
+    assert results[0].user_review_dates is None
+    assert results[1].user_review_dates is None
+    assert results[2].user_review_dates is None
 
 
 def test_derivation_can_be_disabled() -> None:

@@ -34,26 +34,25 @@ def test_analyzes_crawler_reviews_and_echoes_source_ids() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["product_key"] == "elevenst:1831255717"
+    assert body["platform"] == "elevenst"
+    assert body["product_id"] == "1831255717"
     assert body["review_count"] == 1
 
     result = body["results"][0]
-    assert result["platform"] == "elevenst"
     assert result["review_id"] == "545961223"
-    assert result["product_id"] == "1831255717"
-    assert result["analysis_review_id"] == "elevenst:545961223"
-    assert result["available"] is True
+    assert result["text_score"] == 100
     assert result["level"] in {"safe", "warn", "danger"}
 
 
 def test_behavior_signal_is_unavailable_without_crawler_evidence() -> None:
     response = client.post(ENDPOINT, json={"reviews": [crawler_review("1")]})
 
-    signals = response.json()["results"][0]["signals"]
-    assert signals["text"]["available"] is True
-    assert signals["behavior"]["available"] is False
-    assert signals["behavior"]["score"] is None
-    assert "insufficient_behavior_evidence" in signals["behavior"]["unavailable_reasons"]
+    result = response.json()["results"][0]
+    assert result["text_score"] == 100
+    assert result["behavior_score"] == -1
+    assert result["network_score"] == -1
+    assert "signals" not in result
+
 
 
 def test_duplicate_content_raises_network_signal() -> None:
@@ -68,10 +67,9 @@ def test_duplicate_content_raises_network_signal() -> None:
     )
 
     results = response.json()["results"]
-    network = results[0]["signals"]["network"]
-    assert network["available"] is True
-    assert "network" in results[0]["used_signals"]
-    assert any(reason["source"] == "network" for reason in results[0]["reasons"])
+    assert results[0]["network_score"] == 9.1
+    assert "NETWORK_SIMILAR_REVIEW_PATTERN" in results[0]["reasons"]
+
 
 
 def test_mixed_products_without_product_key_are_rejected() -> None:
@@ -89,7 +87,7 @@ def test_mixed_products_without_product_key_are_rejected() -> None:
     assert "must share one" in response.json()["detail"]
 
 
-def test_explicit_product_key_groups_multiple_platforms() -> None:
+def test_v05_rejects_multiple_platforms_even_with_product_key() -> None:
     response = client.post(
         ENDPOINT,
         json={
@@ -101,10 +99,9 @@ def test_explicit_product_key_groups_multiple_platforms() -> None:
         },
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["product_key"] == "review-product-1"
-    assert {result["platform"] for result in body["results"]} == {"elevenst", "kurly"}
+    assert response.status_code == 422
+    assert "must share one" in response.json()["detail"]
+
 
 
 def test_empty_review_list_is_rejected() -> None:
