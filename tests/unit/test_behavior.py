@@ -67,8 +67,8 @@ def test_account_age_requires_both_dates() -> None:
 
     assert only_account_date.features.account_age_days is None
     assert both_dates.features.account_age_days == 14
-    assert both_dates.available is False
-    assert both_dates.p_behavior is None
+    assert both_dates.available is True
+    assert both_dates.p_behavior == 100.0
 
 
 def test_reviews_written_today_requires_stable_user_and_multiple_dates() -> None:

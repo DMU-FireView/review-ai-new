@@ -116,11 +116,11 @@ def test_stream_reports_progress_then_final_result(client) -> None:
     assert events[3][1] == {"job_id": "j1", "collected": 2, "target": 2}
 
     result = events[4][1]
-    assert result["product_key"] == "elevenst:1831255717"
+    assert result["product_id"] == "1831255717"
     assert result["review_count"] == 2
-    assert [item["analysis_review_id"] for item in result["results"]] == [
-        "elevenst:1",
-        "elevenst:2",
+    assert [item["review_id"] for item in result["results"]] == [
+        "1",
+        "2",
     ]
     assert result["results"][0]["level"] in {"safe", "warn", "danger"}
 

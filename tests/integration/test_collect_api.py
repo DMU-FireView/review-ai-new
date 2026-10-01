@@ -70,9 +70,9 @@ def test_collect_fetches_then_analyzes(client) -> None:
     assert gateway.calls == [("elevenst", "1831255717", 30)]
 
     body = response.json()
-    assert body["product_key"] == "elevenst:1831255717"
+    assert body["product_id"] == "1831255717"
     assert body["review_count"] == 2
-    assert body["results"][0]["analysis_review_id"] == "elevenst:1"
+    assert body["results"][0]["review_id"] == "1"
     assert body["results"][0]["level"] in {"safe", "warn", "danger"}
 
 

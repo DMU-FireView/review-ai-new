@@ -21,13 +21,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Sequence
 
+from app.analyzers.p_text import predict_text_score
 from app.analyzers.behavior import BehaviorInput, analyze_behavior
 from app.analyzers.network import (
     NetworkReview,
     SimilarityAdapter,
     analyze_network,
+    analyze_network_batch,
 )
 from app.analyzers.text import SentimentAnalyzer, analyze_text
+from app.integrations.similarity import NormalizedTextSimilarityAdapter
 from app.scoring.meta_scorer import (
     MetaScoreInput,
     RTILevel,
@@ -115,11 +118,18 @@ def analyze_product_reviews(
     )
 
     results: list[ReviewAnalysisResult] = []
-    for review, network_target in zip(reviews, network_reviews, strict=True):
+    # The API's historical default adapter now resolves to the production batch
+    # representation. Explicit custom adapters remain available for tests/integration.
+    use_runtime_batch = similarity_adapter is None or isinstance(
+        similarity_adapter, NormalizedTextSimilarityAdapter,
+    )
+    batch_network = analyze_network_batch(network_reviews) if use_runtime_batch else None
+    for index, (review, network_target) in enumerate(zip(reviews, network_reviews, strict=True)):
+        prediction = predict_text_score(review.content)
+        # Rules provide observable reasons only; they never replace model scores.
         text_result = analyze_text(
-            review.content,
-            sentiment_analyzer=sentiment_analyzer,
-        )
+            review.content, sentiment_analyzer=sentiment_analyzer,
+        ) if isinstance(review.content, str) and review.content.strip() else None
         behavior_result = analyze_behavior(
             BehaviorInput(
                 review_date=review.review_date,
@@ -133,15 +143,17 @@ def analyze_product_reviews(
             candidate
             for candidate in network_reviews
             if candidate.review_id != network_target.review_id
+            and isinstance(candidate.content, str) and candidate.content.strip()
         )
-        network_result = analyze_network(
+        network_result = batch_network[index] if batch_network is not None else analyze_network(
             network_target,
-            comparisons,
+            comparisons if isinstance(review.content, str) and review.content.strip() else (),
             similarity_adapter=similarity_adapter,
         )
 
         signals = AnalysisSignals(
-            text=AnalysisSignal(available=True, score=text_result.p_text),
+            text=AnalysisSignal(available=prediction["text_score"] != -1,
+                                score=prediction["text_score"] if prediction["text_score"] != -1 else None),
             behavior=AnalysisSignal(
                 available=behavior_result.available,
                 score=behavior_result.p_behavior,
@@ -165,7 +177,7 @@ def analyze_product_reviews(
         reasons = (
             tuple(
                 AnalysisReason("text", reason.code, reason.message)
-                for reason in text_result.reasons
+                for reason in (text_result.reasons if text_result is not None else ())
             )
             + tuple(
                 AnalysisReason("behavior", reason.code, reason.message)
@@ -194,6 +206,42 @@ def analyze_product_reviews(
         )
 
     return tuple(results)
+
+
+def analyze_reviews(*, platform: str, product_id: str, reviews) -> dict:
+    """Synchronous Python entry point returning flat Result Contract v0.5.
+
+    Accepts crawler-shaped dictionaries or ReviewAnalysisInput objects.
+    Optional behavioral evidence uses the existing service fields; author is
+    never a user ID. Callers must supply only verified, stable user IDs.
+    No network calls or training; the local P_text v1 model remains cached.
+    """
+    from pydantic import TypeAdapter
+    from app.schemas.analysis import ProductAnalysisResponse, to_review_response
+
+    if not isinstance(platform, str) or not platform.strip():
+        raise ValueError("platform must not be blank")
+    adapter = TypeAdapter(ReviewAnalysisInput)
+    inputs = []
+    for row in reviews:
+        if isinstance(row, ReviewAnalysisInput):
+            inputs.append(row)
+            continue
+        if row.get("platform", platform) != platform or str(row.get("product_id", product_id)) != product_id:
+            raise ValueError("reviews must share platform and product_id")
+        values = {key: row[key] for key in ReviewAnalysisInput.__dataclass_fields__ if key in row}
+        values["product_id"] = product_id
+        values["review_id"] = str(row["review_id"])
+        values["content"] = row.get("content") or ""
+        if "review_date" not in values:
+            values["review_date"] = row.get("written_at")
+        inputs.append(adapter.validate_python(values))
+    results = analyze_product_reviews(product_id, inputs)
+    return ProductAnalysisResponse(
+        platform=platform, product_id=product_id, review_count=len(results),
+        results=[to_review_response(result, platform=platform, product_id=product_id,
+                                    review_id=result.review_id) for result in results],
+    ).model_dump(mode="json")
 
 
 def _to_score_signal(signal: AnalysisSignal) -> ScoreSignal:

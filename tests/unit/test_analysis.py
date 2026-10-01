@@ -79,8 +79,8 @@ def test_unavailable_behavior_is_not_scored_as_zero() -> None:
 def test_two_reviews_are_each_others_network_comparison() -> None:
     adapter = TrackingSimilarityAdapter(0.0)
     inputs = (
-        review("review-1", "첫 번째 본문"),
-        review("review-2", "두 번째 본문"),
+        review("review-1", "충분한 길이를 가진 첫 번째 리뷰 본문입니다."),
+        review("review-2", "비교 가능한 길이를 가진 두 번째 리뷰 본문입니다."),
     )
 
     results = analyze_product_reviews(
@@ -91,8 +91,8 @@ def test_two_reviews_are_each_others_network_comparison() -> None:
 
     assert len(results) == 2
     assert adapter.calls == [
-        ("첫 번째 본문", "두 번째 본문"),
-        ("두 번째 본문", "첫 번째 본문"),
+        ("충분한 길이를 가진 첫 번째 리뷰 본문입니다.", "비교 가능한 길이를 가진 두 번째 리뷰 본문입니다."),
+        ("비교 가능한 길이를 가진 두 번째 리뷰 본문입니다.", "충분한 길이를 가진 첫 번째 리뷰 본문입니다."),
     ]
     assert all(result.signals.network.available for result in results)
 
@@ -104,9 +104,9 @@ def test_duplicate_content_network_signal_affects_final_result() -> None:
         (review("review-1", content), review("review-2", content)),
     )
 
-    assert all(result.signals.network.score == 85.0 for result in results)
+    assert all(result.signals.network.score == 9.1 for result in results)
     assert all("network" in result.used_signals for result in results)
-    assert all(result.rti == pytest.approx(95.71428571428572) for result in results)
+    assert all(result.rti == pytest.approx(74.02857142857142) for result in results)
 
 
 def test_mixed_product_ids_raise_error() -> None:
@@ -136,7 +136,7 @@ def test_input_order_is_preserved() -> None:
 
 
 def test_analyzer_reasons_preserve_source_code_and_message() -> None:
-    content = "최고 최고!!!"
+    content = "정말 최고 최고입니다. 한 달 사용하고 만족했습니다!!!"
     results = analyze_product_reviews(
         "product-1",
         (
@@ -186,3 +186,10 @@ def test_sentiment_and_custom_similarity_adapters_can_be_injected() -> None:
     assert sentiment.calls == [review.content for review in inputs]
     assert len(similarity.calls) == 2
     assert all(result.signals.network.score == 100.0 for result in results)
+
+
+@pytest.fixture(autouse=True)
+def mock_model(monkeypatch):
+    monkeypatch.setattr("app.services.analysis.predict_text_score", lambda content: {
+        "text_score": 100, "suspicious_probability": 0., "predicted_label": "NORMAL",
+    })

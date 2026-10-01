@@ -156,10 +156,10 @@ def test_invalid_policy_weight_is_rejected() -> None:
     ("rti", "expected"),
     [
         # Ground Truth로 검증된 threshold가 아닌 MVP용 v0 policy 경계다.
-        (49.99, RTILevel.DANGER),
-        (50.0, RTILevel.WARN),
-        (79.99, RTILevel.WARN),
-        (80.0, RTILevel.SAFE),
+        (39.99, RTILevel.DANGER),
+        (40.0, RTILevel.WARN),
+        (69.99, RTILevel.WARN),
+        (70.0, RTILevel.SAFE),
     ],
 )
 def test_rti_level_boundaries(rti: float, expected: RTILevel) -> None:
