@@ -330,6 +330,8 @@ def _analyze(
     """crawler 리뷰를 분석하고 원본 식별자를 붙여 응답을 만든다."""
 
     try:
+        if not reviews or len({(review.platform, review.product_id) for review in reviews}) != 1:
+            raise ValueError("Result Contract v0.5 reviews must share one (platform, product_id)")
         analysis_inputs = to_analysis_inputs(reviews, product_key=product_key)
         results = analyze_product_reviews(
             analysis_inputs[0].product_id,
@@ -349,7 +351,8 @@ def _analyze(
         for review, result in zip(reviews, results, strict=True)
     ]
     return ProductAnalysisResponse(
-        product_key=analysis_inputs[0].product_id,
+        platform=reviews[0].platform,
+        product_id=reviews[0].product_id,
         review_count=len(responses),
         results=responses,
     )

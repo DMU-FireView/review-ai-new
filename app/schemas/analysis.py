@@ -1,114 +1,70 @@
-"""분석 결과를 Spring으로 돌려주는 응답 schema 모듈.
+"""Flat Result Contract v0.5. Missing scores are -1; missing level is null."""
 
-역할:
-- `ReviewAnalysisResult`를 직렬화 가능한 응답 구조로 옮긴다.
-- crawler 원본 식별자(platform, review_id, product_id)를 함께 실어 Spring이 원본과 대조할 수 있게 한다.
+from typing import Annotated, Literal
+from math import isfinite
+from pydantic import BaseModel, ConfigDict, Field, BeforeValidator, model_validator
 
-수정 범위:
-- [INTEGRATION]
-- 응답 형태 변경은 Spring 담당자와 협의한다.
-- analyzer 점수 의미나 RTI 등급 기준은 이 파일에서 변경하지 않는다.
-
-주의:
-- unavailable 신호를 0점·100점·중립값으로 채우지 않고 null과 사유를 그대로 노출한다.
-"""
-
-from pydantic import BaseModel, Field
-
-from app.services.analysis import AnalysisSignal, ReviewAnalysisResult
+from app.services.analysis import ReviewAnalysisResult
+from app.scoring.meta_scorer import classify_rti
 
 
-class SignalResponse(BaseModel):
-    """analyzer 신호 하나의 사용 가능 여부와 점수."""
-
-    available: bool
-    score: float | None = Field(default=None, description="0~100, unavailable이면 null")
-    unavailable_reasons: list[str] = Field(default_factory=list)
-
-
-class SignalsResponse(BaseModel):
-    """리뷰 하나의 P_text, P_behavior, P_network 상태."""
-
-    text: SignalResponse
-    behavior: SignalResponse
-    network: SignalResponse
+def validate_score(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("score must be numeric, never null")
+    if not isfinite(value) or (value != -1 and not 0 <= value <= 100):
+        raise ValueError("score must be -1 or between 0 and 100")
+    return float(value)
 
 
-class ReasonResponse(BaseModel):
-    """출처를 보존한 analyzer 판단 근거."""
-
-    source: str = Field(description="text | behavior | network")
-    code: str
-    message: str
+Score = Annotated[float, BeforeValidator(validate_score), Field(ge=-1, le=100)]
 
 
 class ReviewAnalysisResponse(BaseModel):
-    """리뷰 한 건의 analyzer 신호와 최종 RTI 결과."""
+    model_config = ConfigDict(extra="forbid")
 
-    platform: str
-    review_id: str = Field(description="platform 내 원본 리뷰 ID")
-    product_id: str = Field(description="platform 내 원본 상품 ID")
-    analysis_review_id: str = Field(description="분석에 사용한 platform 스코프 리뷰 키")
-    product_key: str = Field(description="분석 단위를 묶은 상품 키")
+    review_id: str
+    rti: Score
+    level: Literal["safe", "warn", "danger"] | None
+    text_score: Score
+    behavior_score: Score
+    network_score: Score
+    reasons: list[str] = Field(default_factory=list)
 
-    available: bool
-    rti: float | None = Field(default=None, description="신호가 하나도 없으면 null")
-    level: str | None = Field(default=None, description="safe | warn | danger")
-    signals: SignalsResponse
-    used_signals: list[str]
-    used_signal_count: int
-    unavailable_signals: list[str]
-    applied_weights: dict[str, float]
-    reasons: list[ReasonResponse]
-    unavailable_reason: str | None = None
+    @model_validator(mode="after")
+    def consistent_level(self):
+        missing = all(score == -1 for score in (self.text_score, self.behavior_score, self.network_score))
+        if (self.rti == -1) != missing:
+            raise ValueError("RTI must be unavailable exactly when all signals are unavailable")
+        expected = None if self.rti == -1 else classify_rti(self.rti).value
+        if self.level != expected:
+            raise ValueError("level must match RTI; unavailable RTI has null level")
+        return self
 
 
 class ProductAnalysisResponse(BaseModel):
-    """상품 하나에 대한 리뷰별 분석 결과 묶음."""
+    model_config = ConfigDict(extra="forbid")
 
-    product_key: str
-    review_count: int
+    platform: str
+    product_id: str
+    review_count: int = Field(ge=0)
     results: list[ReviewAnalysisResponse]
 
+    @model_validator(mode="after")
+    def consistent_count(self):
+        if self.review_count != len(self.results):
+            raise ValueError("review_count must equal results length")
+        return self
 
-def to_review_response(
-    result: ReviewAnalysisResult,
-    *,
-    platform: str,
-    review_id: str,
-    product_id: str,
-) -> ReviewAnalysisResponse:
-    """분석 결과에 crawler 원본 식별자를 붙여 응답 구조로 옮긴다."""
 
+def to_review_response(result: ReviewAnalysisResult, *, platform: str,
+                       review_id: str, product_id: str) -> ReviewAnalysisResponse:
+    rti = round(result.rti, 1) if result.rti is not None else -1
     return ReviewAnalysisResponse(
-        platform=platform,
         review_id=review_id,
-        product_id=product_id,
-        analysis_review_id=result.review_id,
-        product_key=result.product_id,
-        available=result.available,
-        rti=result.rti,
-        level=result.level.value if result.level is not None else None,
-        signals=SignalsResponse(
-            text=_to_signal_response(result.signals.text),
-            behavior=_to_signal_response(result.signals.behavior),
-            network=_to_signal_response(result.signals.network),
-        ),
-        used_signals=list(result.used_signals),
-        used_signal_count=result.used_signal_count,
-        unavailable_signals=list(result.unavailable_signals),
-        applied_weights=dict(result.applied_weights),
-        reasons=[
-            ReasonResponse(source=reason.source, code=reason.code, message=reason.message)
-            for reason in result.reasons
-        ],
-        unavailable_reason=result.unavailable_reason,
-    )
-
-
-def _to_signal_response(signal: AnalysisSignal) -> SignalResponse:
-    return SignalResponse(
-        available=signal.available,
-        score=signal.score,
-        unavailable_reasons=list(signal.unavailable_reasons),
+        rti=rti,
+        level=classify_rti(rti).value if rti != -1 else None,
+        text_score=result.signals.text.score if result.signals.text.available else -1,
+        behavior_score=result.signals.behavior.score if result.signals.behavior.available else -1,
+        network_score=result.signals.network.score if result.signals.network.available else -1,
+        reasons=list(dict.fromkeys(f"{reason.source.upper()}_{reason.code}" for reason in result.reasons)),
     )
