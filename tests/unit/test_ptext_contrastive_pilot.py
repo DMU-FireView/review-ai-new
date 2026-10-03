@@ -6,6 +6,7 @@ from app.training.p_text.contrastive_pilot import (
     ForbiddenRecord,
     cross_corpus_near_template_matches,
     discover_forbidden_paths,
+    health_keyword_balance,
 )
 
 
@@ -132,3 +133,132 @@ def test_discovery_excludes_pilot_tree(tmp_path) -> None:
     expected = corpus / "training.jsonl"
     expected.write_text("{}\n", encoding="utf-8")
     assert discover_forbidden_paths([tmp_path], pilot_root=pilot) == [expected]
+
+
+def _extended_pair(*, category="EXAGGERATED_PRAISE_WITHOUT_EVIDENCE", domain="cosmetics"):
+    rows = deepcopy(_valid_rows()[:2])
+    for row in rows:
+        row["category"] = category
+        row["domain"] = domain
+        row["praise_intensity"] = "extreme"
+        row["evidence_level"] = "none" if row["label"] == "SUSPICIOUS" else "sufficient"
+        row["human_reviewed"] = False
+        row["human_approved"] = False
+    return rows
+
+
+def _validate_extended(rows):
+    return validate_pilot(rows, expected_pairs_per_category=None)
+
+
+def test_exaggerated_praise_category_passes() -> None:
+    assert _validate_extended(_extended_pair()).passed
+
+
+def test_cosmetics_domain_passes() -> None:
+    assert _validate_extended(_extended_pair(domain="cosmetics")).passed
+
+
+def test_health_supplement_domain_passes() -> None:
+    assert _validate_extended(_extended_pair(domain="health_supplement")).passed
+
+
+def test_pharma_otc_domain_passes() -> None:
+    assert _validate_extended(_extended_pair(domain="pharma_otc")).passed
+
+
+def test_invalid_praise_intensity_fails() -> None:
+    rows = _extended_pair()
+    rows[0]["praise_intensity"] = "maximum"
+    assert any("invalid praise_intensity" in error for error in _validate_extended(rows).errors)
+
+
+def test_invalid_evidence_level_fails() -> None:
+    rows = _extended_pair()
+    rows[0]["evidence_level"] = "unknown"
+    assert any("invalid evidence_level" in error for error in _validate_extended(rows).errors)
+
+
+def test_synthetic_llm_generated_passes() -> None:
+    rows = _extended_pair()
+    assert all(row["source_type"] == "synthetic" and row["is_llm_generated"] for row in rows)
+    assert _validate_extended(rows).passed
+
+
+def test_synthetic_human_reviewed_and_approved_passes() -> None:
+    rows = _extended_pair()
+    for row in rows:
+        row["human_reviewed"] = True
+        row["human_approved"] = True
+    assert _validate_extended(rows).passed
+
+
+def test_llm_generated_human_written_conflict_fails() -> None:
+    rows = _extended_pair()
+    for row in rows:
+        row["source_type"] = "human_written"
+    assert any("conflicts with source_type=human_written" in error for error in _validate_extended(rows).errors)
+
+
+def test_extreme_praise_with_sufficient_evidence_normal_passes() -> None:
+    rows = _extended_pair()
+    normal = next(row for row in rows if row["label"] == "NORMAL")
+    assert normal["praise_intensity"] == "extreme"
+    assert normal["evidence_level"] == "sufficient"
+    assert _validate_extended(rows).passed
+
+
+def test_extreme_praise_without_evidence_suspicious_passes() -> None:
+    rows = _extended_pair()
+    suspicious = next(row for row in rows if row["label"] == "SUSPICIOUS")
+    assert suspicious["praise_intensity"] == "extreme"
+    assert suspicious["evidence_level"] == "none"
+    assert _validate_extended(rows).passed
+
+
+def test_health_keyword_normal_sample_passes() -> None:
+    rows = _extended_pair(domain="health_supplement")
+    normal = next(row for row in rows if row["label"] == "NORMAL")
+    normal["content"] = "비타민을 세 달 복용했고 피로에는 변화가 없지만 크기가 작아 만족합니다."
+    assert _validate_extended(rows).passed
+
+
+def test_health_keyword_suspicious_sample_passes() -> None:
+    rows = _extended_pair(domain="health_supplement")
+    suspicious = next(row for row in rows if row["label"] == "SUSPICIOUS")
+    suspicious["content"] = "비타민 성분만 봤고 복용 전이지만 피로 개선 효과가 완벽하다고 확신합니다."
+    assert _validate_extended(rows).passed
+
+
+def test_health_keyword_balance_reports_both_labels() -> None:
+    rows = _extended_pair(domain="health_supplement")
+    rows[0]["content"] = "복용 전이지만 이 비타민 효과는 완벽합니다."
+    rows[1]["content"] = "이 비타민을 세 달 복용했지만 효과는 잘 모르겠습니다."
+    balance = health_keyword_balance(rows)
+    assert balance["비타민"] == {"NORMAL": 1, "SUSPICIOUS": 1}
+    assert balance["효과"] == {"NORMAL": 1, "SUSPICIOUS": 1}
+
+
+def test_short_health_keyword_does_not_match_inside_unrelated_word() -> None:
+    rows = _extended_pair()
+    rows[0]["content"] = "배송 날짜를 예약했지만 제품은 아직 사용하지 않았습니다."
+    rows[1]["content"] = "세 달 동안 사용한 뒤 만족해서 약을 보관하는 데 쓰고 있습니다."
+    balance = health_keyword_balance(rows)
+    assert balance["약"] == {"NORMAL": 1, "SUSPICIOUS": 0}
+
+
+def test_legacy_pilot_row_without_extended_metadata_passes() -> None:
+    rows = _valid_rows()
+    for row in rows:
+        for name in ("praise_intensity", "evidence_level", "human_reviewed", "human_approved"):
+            row.pop(name, None)
+    assert validate_pilot(rows).passed
+
+
+def test_pending_human_placeholder_remains_protected_with_extended_metadata() -> None:
+    rows = _valid_rows()
+    placeholder = next(row for row in rows if row["source_type"] == "PENDING_HUMAN")
+    placeholder["human_reviewed"] = True
+    placeholder["human_approved"] = True
+    placeholder["review_status"] = "AGREED"
+    assert any("blank placeholder marked training-ready" in error for error in validate_pilot(rows).errors)

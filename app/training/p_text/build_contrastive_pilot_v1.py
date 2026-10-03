@@ -6,7 +6,7 @@ import csv
 import json
 from pathlib import Path
 
-from app.training.p_text.contrastive_pilot import CATEGORIES, REQUIRED_COLUMNS
+from app.training.p_text.contrastive_pilot import CATEGORIES, EXPORT_COLUMNS
 
 
 OUTPUT_DIR = Path("data/ptext_improvement/pilot_v1")
@@ -148,6 +148,10 @@ def _row(
         "pair_relation": relation if synthetic else "TODO",
         "length_bucket": length_bucket if synthetic else "TODO",
         "style": style if synthetic else "TODO",
+        "praise_intensity": "",
+        "evidence_level": "",
+        "human_reviewed": False,
+        "human_approved": False,
     }
 
 
@@ -185,7 +189,7 @@ def main() -> None:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
     with CSV_PATH.open("x", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=REQUIRED_COLUMNS)
+        writer = csv.DictWriter(handle, fieldnames=EXPORT_COLUMNS)
         writer.writeheader()
         writer.writerows(rows)
 

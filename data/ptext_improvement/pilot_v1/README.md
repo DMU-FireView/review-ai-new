@@ -11,6 +11,11 @@ rows and columns as a reviewer-friendly view.
 - Only populated rows with `review_status=AGREED` or `ADJUDICATED` may later be
   considered training-ready.  This pilot currently contains no training-ready
   rows.
+- `praise_intensity` and `evidence_level` are blank legacy annotations until a
+  reviewer explicitly assigns an allowed enum value.  Missing or blank values
+  do not invent evidence.
+- `human_reviewed` and `human_approved` default to `false`.  Human approval does
+  not change `source_type` or `is_llm_generated`.
 - Validate without modifying the data:
 
   `python -m app.training.p_text.contrastive_pilot data/ptext_improvement/pilot_v1/annotation_pilot_v1.jsonl`

@@ -27,6 +27,15 @@ CATEGORIES = (
     "PROMOTION_EXPERIENCE_MIX",
     "FEATURE_AS_PERSONAL_EXPERIENCE",
 )
+SUPPORTED_CATEGORIES = frozenset((*CATEGORIES, "EXAGGERATED_PRAISE_WITHOUT_EVIDENCE"))
+SUPPORTED_DOMAINS = frozenset(
+    {
+        "cosmetics", "health_supplement", "pharma_otc", "food", "fashion",
+        "household", "electronics",
+        # Legacy pilot values remain valid during migration.
+        "cosmetics_health", "mixed",
+    }
+)
 REQUIRED_COLUMNS = (
     "sample_id", "content", "label", "category", "secondary_categories",
     "domain", "source_type", "parent_pair_id", "generation_family_id",
@@ -34,6 +43,16 @@ REQUIRED_COLUMNS = (
     "split", "seed", "created_at", "source_reference", "creation_method",
     "original_source_type", "is_llm_generated", "pair_relation",
     "length_bucket", "style",
+)
+EXTENDED_METADATA_COLUMNS = (
+    "praise_intensity", "evidence_level", "human_reviewed", "human_approved",
+)
+EXPORT_COLUMNS = (*REQUIRED_COLUMNS, *EXTENDED_METADATA_COLUMNS)
+PRAISE_INTENSITIES = frozenset({"low", "medium", "extreme"})
+EVIDENCE_LEVELS = frozenset({"none", "limited", "sufficient"})
+HEALTH_KEYWORDS = (
+    "비타민", "영양제", "유산균", "오메가3", "홍삼", "효과", "피로",
+    "건강", "성분", "약", "복용", "추천",
 )
 LABELS = frozenset({"NORMAL", "SUSPICIOUS"})
 SOURCE_TYPES = frozenset(
@@ -128,18 +147,17 @@ def validate_pilot(
         if len(source_types) != 1:
             report.errors.append(f"{pair_id}: pair source_type mismatch")
 
-    if len(rows) != 100:
-        report.errors.append(f"expected 100 rows, got {len(rows)}")
-    if len(pairs) != 50:
-        report.errors.append(f"expected 50 pairs, got {len(pairs)}")
-
     category_pairs = Counter(
         str(pair_rows[0].get("category", ""))
         for pair_rows in pairs.values()
         if pair_rows
     )
     if expected_pairs_per_category is not None:
-        unknown_categories = sorted(set(category_pairs).difference(CATEGORIES))
+        if len(rows) != 100:
+            report.errors.append(f"expected 100 rows, got {len(rows)}")
+        if len(pairs) != 50:
+            report.errors.append(f"expected 50 pairs, got {len(pairs)}")
+        unknown_categories = sorted(set(category_pairs).difference(SUPPORTED_CATEGORIES))
         if unknown_categories:
             report.errors.append("unknown categories: " + ", ".join(unknown_categories))
         for category in CATEGORIES:
@@ -155,12 +173,56 @@ def validate_pilot(
         status = str(row.get("review_status", ""))
         content = str(row.get("content", ""))
         split = str(row.get("split", ""))
+        category = str(row.get("category", ""))
+        domain = str(row.get("domain", ""))
+        praise_intensity = row.get("praise_intensity", "")
+        evidence_level = row.get("evidence_level", "")
+        is_llm_generated = row.get("is_llm_generated", False)
+        human_reviewed = row.get("human_reviewed", False)
+        human_approved = row.get("human_approved", False)
         if str(row.get("label", "")) not in LABELS:
             report.errors.append(f"row {index}: invalid label")
+        if category not in SUPPORTED_CATEGORIES:
+            report.errors.append(f"row {index}: invalid category {category!r}")
+        if domain not in SUPPORTED_DOMAINS:
+            report.errors.append(f"row {index}: invalid domain {domain!r}")
         if source_type not in SOURCE_TYPES:
             report.errors.append(f"row {index}: invalid source_type {source_type!r}")
         if status not in REVIEW_STATUSES:
             report.errors.append(f"row {index}: invalid review_status {status!r}")
+        if praise_intensity not in ("", None) and praise_intensity not in PRAISE_INTENSITIES:
+            report.errors.append(f"row {index}: invalid praise_intensity {praise_intensity!r}")
+        if evidence_level not in ("", None) and evidence_level not in EVIDENCE_LEVELS:
+            report.errors.append(f"row {index}: invalid evidence_level {evidence_level!r}")
+        for name, value in (
+            ("is_llm_generated", is_llm_generated),
+            ("human_reviewed", human_reviewed),
+            ("human_approved", human_approved),
+        ):
+            if not isinstance(value, bool):
+                report.errors.append(f"row {index}: {name} must be boolean")
+        if isinstance(is_llm_generated, bool):
+            if source_type == "synthetic" and not is_llm_generated:
+                report.errors.append(f"row {index}: synthetic row must retain is_llm_generated=true")
+            if source_type in {"human_written", "human_curated", "PENDING_HUMAN"} and is_llm_generated:
+                report.errors.append(
+                    f"row {index}: is_llm_generated=true conflicts with source_type={source_type}"
+                )
+        if isinstance(human_approved, bool) and isinstance(human_reviewed, bool):
+            if human_approved and not human_reviewed:
+                report.errors.append(f"row {index}: human_approved=true requires human_reviewed=true")
+        if category == "EXAGGERATED_PRAISE_WITHOUT_EVIDENCE":
+            if praise_intensity in ("", None) or evidence_level in ("", None):
+                report.errors.append(
+                    f"row {index}: exaggerated-praise rows require praise_intensity and evidence_level"
+                )
+            elif str(row.get("label", "")) == "SUSPICIOUS" and not (
+                praise_intensity == "extreme" and evidence_level in {"none", "limited"}
+            ):
+                report.errors.append(
+                    f"row {index}: suspicious exaggerated praise requires extreme praise "
+                    "with none/limited evidence"
+                )
         if not content.strip():
             if source_type != "PENDING_HUMAN":
                 report.errors.append(f"row {index}: blank content must be PENDING_HUMAN")
@@ -187,33 +249,34 @@ def validate_pilot(
         if pair_rows and {str(row.get("source_type", "")) for row in pair_rows}
         <= {"human_written", "human_curated"}
     )
-    if synthetic_pair_count > 20:
-        report.errors.append(f"synthetic/augmented pair limit exceeded: {synthetic_pair_count}")
-    if human_pair_count + pending_pair_count < 30:
-        report.errors.append("human or pending-human pair target is below 30")
-    for category in CATEGORIES:
-        category_pair_rows = [
-            pair_rows for pair_rows in pairs.values()
-            if pair_rows and str(pair_rows[0].get("category", "")) == category
-        ]
-        synthetic_or_augmented = sum(
-            {str(row.get("source_type", "")) for row in pair_rows}
-            <= {"synthetic", "augmented"}
-            for pair_rows in category_pair_rows
-        )
-        human_or_pending = sum(
-            {str(row.get("source_type", "")) for row in pair_rows}
-            <= {"human_written", "human_curated", "PENDING_HUMAN"}
-            for pair_rows in category_pair_rows
-        )
-        if synthetic_or_augmented != 4:
-            report.errors.append(
-                f"{category}: expected 4 synthetic/augmented pairs, got {synthetic_or_augmented}"
+    if expected_pairs_per_category is not None:
+        if synthetic_pair_count > 20:
+            report.errors.append(f"synthetic/augmented pair limit exceeded: {synthetic_pair_count}")
+        if human_pair_count + pending_pair_count < 30:
+            report.errors.append("human or pending-human pair target is below 30")
+        for category in CATEGORIES:
+            category_pair_rows = [
+                pair_rows for pair_rows in pairs.values()
+                if pair_rows and str(pair_rows[0].get("category", "")) == category
+            ]
+            synthetic_or_augmented = sum(
+                {str(row.get("source_type", "")) for row in pair_rows}
+                <= {"synthetic", "augmented"}
+                for pair_rows in category_pair_rows
             )
-        if human_or_pending != 6:
-            report.errors.append(
-                f"{category}: expected 6 human/pending pairs, got {human_or_pending}"
+            human_or_pending = sum(
+                {str(row.get("source_type", "")) for row in pair_rows}
+                <= {"human_written", "human_curated", "PENDING_HUMAN"}
+                for pair_rows in category_pair_rows
             )
+            if synthetic_or_augmented != 4:
+                report.errors.append(
+                    f"{category}: expected 4 synthetic/augmented pairs, got {synthetic_or_augmented}"
+                )
+            if human_or_pending != 6:
+                report.errors.append(
+                    f"{category}: expected 6 human/pending pairs, got {human_or_pending}"
+                )
 
     populated = [row for row in rows if str(row.get("content", "")).strip()]
     exact_groups = _duplicate_groups(populated, lambda text: text)
@@ -244,7 +307,8 @@ def validate_pilot(
         report.errors.append(f"generation family limit exceeded: {over_limit_families}")
 
     domain_rows = Counter(str(row.get("domain", "")) for row in populated)
-    if populated and max(domain_rows.values(), default=0) / len(populated) > 0.30:
+    if (expected_pairs_per_category is not None and populated
+            and max(domain_rows.values(), default=0) / len(populated) > 0.30):
         report.errors.append("domain concentration exceeds 30% among populated rows")
 
     supplied_forbidden = list(forbidden_contents)
@@ -290,6 +354,7 @@ def validate_pilot(
             f"{len(near_template_pairs)}"
         )
 
+    keyword_balance = health_keyword_balance(populated)
     report.counts = {
         "rows": len(rows),
         "pairs": len(pairs),
@@ -316,8 +381,35 @@ def validate_pilot(
             and bool(str(row.get("content", "")).strip())
             for row in rows
         ),
+        "health_keyword_balance": keyword_balance,
     }
     return report
+
+
+def health_keyword_balance(rows: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, int]]:
+    """Report label-wise keyword counts without using keywords to assign labels."""
+
+    balance: dict[str, dict[str, int]] = {}
+    for keyword in HEALTH_KEYWORDS:
+        counts = {"NORMAL": 0, "SUSPICIOUS": 0}
+        for row in rows:
+            label = str(row.get("label", ""))
+            if label in counts and _contains_health_keyword(str(row.get("content", "")), keyword):
+                counts[label] += 1
+        balance[keyword] = counts
+    return balance
+
+
+def _contains_health_keyword(content: str, keyword: str) -> bool:
+    if keyword != "약":
+        return keyword in content
+    return bool(
+        re.search(
+            r"(?<![0-9A-Za-z가-힣])약(?:을|를|이|가|은|는|과|와|의|으로|에|도|만)?"
+            r"(?![0-9A-Za-z가-힣])",
+            content,
+        )
+    )
 
 
 def read_forbidden_contents(paths: Iterable[Path]) -> list[str]:

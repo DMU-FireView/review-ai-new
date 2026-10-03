@@ -1,0 +1,28 @@
+{
+  "schema_name": "ptext_synthetic_expansion_v1",
+  "source_of_truth_format": "jsonl",
+  "required_fields": [
+    "sample_id", "content", "label", "category", "domain", "source_type",
+    "parent_pair_id", "generation_family_id", "difficulty", "review_status",
+    "notes", "creation_method", "is_llm_generated", "human_reviewed",
+    "human_approved", "praise_intensity", "evidence_level", "pair_relation"
+  ],
+  "categories": [
+    "EXPERIENCE_FREE_CLAIM", "UNUSED_RECOMMENDATION", "NATURAL_PROMOTIONAL",
+    "PROMOTION_EXPERIENCE_MIX", "FEATURE_AS_PERSONAL_EXPERIENCE",
+    "EXAGGERATED_PRAISE_WITHOUT_EVIDENCE"
+  ],
+  "domains": [
+    "cosmetics", "health_supplement", "pharma_otc", "food", "fashion",
+    "household", "electronics"
+  ],
+  "praise_intensity": ["low", "medium", "extreme"],
+  "evidence_level": ["none", "limited", "sufficient"],
+  "provenance_rules": {
+    "synthetic_requires_is_llm_generated": true,
+    "human_source_rejects_is_llm_generated": true,
+    "human_approved_requires_human_reviewed": true,
+    "human_review_does_not_change_source_type": true
+  },
+  "rows": []
+}
